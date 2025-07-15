@@ -1,0 +1,46 @@
+version: "3"
+
+dotenv:
+  - .env
+
+vars:
+  BIN_DIR: "{{.ROOT_DIR}}/bin"
+  MIGRATOR_BIN: "{{.BIN_DIR}}/migrator"
+
+tasks:
+  install-migrate-cli:
+    desc: "Устанавливает golang-migrate CLI в ./bin"
+    cmds:
+      - |
+        if [ ! -f "{{.MIGRATE_BIN}}" ]; then
+          echo "📦 Устанавливаем golang-migrate CLI..."
+          GOBIN="{{.BIN_DIR}}" go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+        else
+          echo "golang-migrate CLI уже установлен"
+        fi
+    status:
+      - test -x "{{.MIGRATE_BIN}}"
+
+  build-migrator:
+    desc: "Собирает мигратор в bin/migrator"
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}"
+      - go build -o "{{.MIGRATOR_BIN}}" ./cmd/migrator
+
+  migrate-create:
+    desc: "Создает пару пустых SQL-файлов миграции"
+    deps: [install-migrate-cli]
+    cmds:
+      - bash ./scripts/migrate_create.sh
+
+  migrate-up:
+    desc: "Применить миграции (up)"
+    deps: [build-migrator]
+    cmds:
+      - '{{.MIGRATOR_BIN}} -dir file://./migrations -dsn "$DATABASE_URL" -action up'
+
+  migrate-down:
+    desc: "Откатить миграции (down)"
+    deps: [build-migrator]
+    cmds:
+      - '{{.MIGRATOR_BIN}} -dir file://./migrations -dsn "$DATABASE_URL" -action down'
