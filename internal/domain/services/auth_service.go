@@ -97,6 +97,10 @@ func (s *AuthService) Authenticate(ctx context.Context, login, password string) 
 	return token, nil
 }
 
+func (s *AuthService) GetUserByLogin(ctx context.Context, login string) (*entities.User, error) {
+	return s.userRepo.GetByLogin(ctx, login)
+}
+
 func (s *AuthService) ValidateToken(ctx context.Context, token string) (*entities.User, error) {
 	session, err := s.sessionRepo.GetByToken(ctx, token)
 	if err != nil {

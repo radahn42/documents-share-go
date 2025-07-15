@@ -1,16 +1,16 @@
 package database
 
 import (
+	"context"
 	"document-server/internal/config"
 	"fmt"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/jmoiron/sqlx"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresDB struct {
-	db *sqlx.DB
+	pool *pgxpool.Pool
 }
 
 func NewPostgresDB(cfg config.DatabaseConfig) (*PostgresDB, error) {
@@ -19,22 +19,32 @@ func NewPostgresDB(cfg config.DatabaseConfig) (*PostgresDB, error) {
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Database, cfg.SSLMode,
 	)
 
-	db, err := sqlx.Connect("pgx", dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse database config: %w", err)
+	}
+
+	config.MaxConns = 25
+	config.MinConns = 5
+	config.MaxConnLifetime = 5 * time.Minute
+	config.MaxConnIdleTime = 1 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	if err := pool.Ping(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
 
-	return &PostgresDB{db: db}, nil
+	return &PostgresDB{pool: pool}, nil
 }
 
-func (p *PostgresDB) DB() *sqlx.DB {
-	return p.db
+func (p *PostgresDB) Pool() *pgxpool.Pool {
+	return p.pool
 }
 
-func (p *PostgresDB) Close() error {
-	return p.db.Close()
+func (p *PostgresDB) Close() {
+	p.pool.Close()
 }

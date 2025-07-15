@@ -32,9 +32,9 @@ func Run(cfg config.Config) error {
 	}
 	defer redisClient.Close()
 
-	userRepo := repositories.NewUserRepository(db.DB())
-	docRepo := repositories.NewDocumentRepository(db.DB())
-	sessionRepo := repositories.NewSessionRepository(db.DB())
+	userRepo := repositories.NewUserRepository(db.Pool())
+	docRepo := repositories.NewDocumentRepository(db.Pool())
+	sessionRepo := repositories.NewSessionRepository(db.Pool())
 
 	cacheSvc := services.NewRedisCacheService(redisClient, cfg.Auth.CacheDuration)
 	authSvc := services.NewAuthService(userRepo, sessionRepo, cfg.Auth.AdminToken, cfg.Auth.JWTSecret, cfg.Auth.TokenDuration)

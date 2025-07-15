@@ -5,7 +5,7 @@ dotenv:
 
 vars:
   BIN_DIR: "{{.ROOT_DIR}}/bin"
-  MIGRATOR_BIN: "{{.BIN_DIR}}/migrator"
+  MIGRATE_BIN: "{{.BIN_DIR}}/migrate"
 
 tasks:
   install-migrate-cli:
@@ -14,33 +14,199 @@ tasks:
       - |
         if [ ! -f "{{.MIGRATE_BIN}}" ]; then
           echo "📦 Устанавливаем golang-migrate CLI..."
-          GOBIN="{{.BIN_DIR}}" go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+          mkdir -p "{{.BIN_DIR}}"
+          # Устанавливаем через go install с поддержкой postgres
+          GOBIN="{{.BIN_DIR}}" go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
         else
-          echo "golang-migrate CLI уже установлен"
+          echo "✅ golang-migrate CLI уже установлен"
         fi
     status:
       - test -x "{{.MIGRATE_BIN}}"
 
-  build-migrator:
-    desc: "Собирает мигратор в bin/migrator"
+  migrate-debug:
+    desc: "Отладка миграций - показать поддерживаемые драйверы"
+    deps: [install-migrate-cli]
     cmds:
-      - mkdir -p "{{.BIN_DIR}}"
-      - go build -o "{{.MIGRATOR_BIN}}" ./cmd/migrator
+      - echo "🔍 Проверяем поддерживаемые драйверы..."
+      - '"{{.MIGRATE_BIN}}" -help'
+      - 'echo "📝 DATABASE_URL: $DATABASE_URL"'
+      - echo "🔧 Конвертированный URL:"
+      - |
+        DB_URL=$(echo "$DATABASE_URL" | sed 's/pgx5/postgres/' | sed 's/@postgres:/@localhost:/')
+        echo "$DB_URL"
 
   migrate-create:
     desc: "Создает пару пустых SQL-файлов миграции"
     deps: [install-migrate-cli]
     cmds:
-      - bash ./scripts/migrate_create.sh
+      - |
+        read -p "📝 Введите название миграции: " name
+        if [ -z "$name" ]; then
+          echo "❌ Название миграции не может быть пустым"
+          exit 1
+        fi
+        echo "🆕 Создание миграции: $name"
+        "{{.MIGRATE_BIN}}" create -ext sql -dir migrations -seq "$name"
+        echo "✅ Миграция создана в ./migrations/"
 
   migrate-up:
-    desc: "Применить миграции (up)"
-    deps: [build-migrator]
+    desc: "Применить все миграции (up)"
+    deps: [install-migrate-cli]
     cmds:
-      - '{{.MIGRATOR_BIN}} -dir file://./migrations -dsn "$DATABASE_URL" -action up'
+      - echo "⬆️  Применяем миграции..."
+      - |
+        # Конвертируем для migrate CLI и используем localhost вместо postgres
+        DB_URL=$(echo "$DATABASE_URL" | sed 's/pgx5/postgres/' | sed 's/@postgres:/@localhost:/')
+        "{{.MIGRATE_BIN}}" -path ./migrations -database "$DB_URL" up
+      - echo "✅ Миграции применены"
 
   migrate-down:
-    desc: "Откатить миграции (down)"
-    deps: [build-migrator]
+    desc: "Откатить все миграции (down)"
+    deps: [install-migrate-cli]
     cmds:
-      - '{{.MIGRATOR_BIN}} -dir file://./migrations -dsn "$DATABASE_URL" -action down'
+      - echo "⬇️  Откатываем миграции..."
+      - |
+        # Конвертируем для migrate CLI и используем localhost вместо postgres
+        DB_URL=$(echo "$DATABASE_URL" | sed 's/pgx5/postgres/' | sed 's/@postgres:/@localhost:/')
+        "{{.MIGRATE_BIN}}" -path ./migrations -database "$DB_URL" down
+      - echo "✅ Миграции откачены"
+
+  migrate-version:
+    desc: "Показать текущую версию миграции"
+    deps: [install-migrate-cli]
+    cmds:
+      - echo "🔍 Проверяем версию миграции..."
+      - |
+        # Конвертируем для migrate CLI и используем localhost вместо postgres
+        DB_URL=$(echo "$DATABASE_URL" | sed 's/pgx5/postgres/' | sed 's/@postgres:/@localhost:/')
+        "{{.MIGRATE_BIN}}" -path ./migrations -database "$DB_URL" version
+
+  migrate-force:
+    desc: "Принудительно установить версию миграции"
+    deps: [install-migrate-cli]
+    cmds:
+      - |
+        read -p "⚠️  Введите версию для принудительной установки: " version
+        if [ -z "$version" ]; then
+          echo "❌ Версия не может быть пустой"
+          exit 1
+        fi
+        echo "🔧 Принудительная установка версии $version..."
+        # Конвертируем для migrate CLI и используем localhost вместо postgres
+        DB_URL=$(echo "$DATABASE_URL" | sed 's/pgx5/postgres/' | sed 's/@postgres:/@localhost:/')
+        "{{.MIGRATE_BIN}}" -path ./migrations -database "$DB_URL" force $version
+        echo "✅ Версия установлена"
+
+  db-reset:
+    desc: "Полный сброс базы данных (down + up)"
+    deps: [install-migrate-cli]
+    cmds:
+      - echo "🔄 Полный сброс базы данных..."
+      - task: migrate-down
+      - task: migrate-up
+      - echo "✅ База данных сброшена"
+
+  build:
+    desc: "Сборка сервера"
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}"
+      - echo "🔨 Сборка сервера..."
+      - go build -ldflags="-s -w" -o "{{.BIN_DIR}}/server" ./cmd/server
+      - 'echo "✅ Сервер собран: {{.BIN_DIR}}/server"'
+    sources:
+      - "./cmd/server/*.go"
+      - "./internal/**/*.go"
+    generates:
+      - "{{.BIN_DIR}}/server"
+
+  run:
+    desc: "Запуск сервера локально"
+    deps: [build]
+    cmds:
+      - echo "🚀 Запуск сервера..."
+      - "{{.BIN_DIR}}/server"
+
+  docker-build:
+    desc: "Сборка Docker образа"
+    cmds:
+      - echo "🐳 Сборка Docker образа..."
+      - docker-compose build
+      - echo "✅ Образ собран"
+
+  docker-up:
+    desc: "Запуск всех сервисов в Docker"
+    cmds:
+      - echo "🚀 Запуск сервисов..."
+      - docker-compose up -d
+      - echo "✅ Сервисы запущены"
+
+  docker-run:
+    desc: "Запуск всего приложения в контейнере (сборка + запуск)"
+    cmds:
+      - echo "🔧 Сборка и запуск приложения..."
+      - docker-compose up --build
+      - echo "✅ Приложение запущено"
+
+  docker-down:
+    desc: "Остановка всех сервисов"
+    cmds:
+      - echo "🛑 Остановка сервисов..."
+      - docker-compose down
+      - echo "✅ Сервисы остановлены"
+
+  docker-logs:
+    desc: "Показать логи сервисов"
+    cmds:
+      - docker-compose logs -f
+
+  docker-restart:
+    desc: "Перезапуск Docker сервисов"
+    cmds:
+      - task: docker-down
+      - task: docker-up
+
+  docker-clean:
+    desc: "Очистка Docker (контейнеры, образы, volumes)"
+    cmds:
+      - echo "🧹 Очистка Docker..."
+      - docker-compose down -v --rmi all
+      - docker system prune -f
+      - echo "✅ Docker очищен"
+
+  fmt:
+    desc: "Форматирование кода"
+    cmds:
+      - echo "💄 Форматирование кода..."
+      - go fmt ./...
+      - echo "✅ Код отформатирован"
+
+  mod-tidy:
+    desc: "Очистка зависимостей"
+    cmds:
+      - echo "📦 Очистка зависимостей..."
+      - go mod tidy
+      - echo "✅ Зависимости очищены"
+
+  deps:
+    desc: "Установка зависимостей"
+    cmds:
+      - echo "📦 Установка зависимостей..."
+      - go mod download
+      - go mod tidy
+      - echo "✅ Зависимости установлены"
+
+  clean:
+    desc: "Очистка собранных файлов"
+    cmds:
+      - echo "🧹 Очистка..."
+      - rm -rf "{{.BIN_DIR}}"
+      - rm -f coverage.out coverage.html
+      - echo "✅ Очистка завершена"
+
+  dev:
+    desc: "Полная настройка для разработки"
+    cmds:
+      - task: deps
+      - task: install-migrate-cli
+      - task: docker-up
+      - echo "🎉 Среда разработки готова!"

@@ -134,19 +134,23 @@ func (h *DocumentHandler) GetList(c *gin.Context) {
 	}
 
 	ownerID := user.ID
+	requestingUserID := user.ID
 
 	if req.Login != "" {
-		// Если указан login, получаем документы другого пользователя
-		// Здесь нужно добавить логику получения пользователя по login
-		// Пока упрощено - используем текущего пользователя
-		ownerID = user.ID
+		targetUser, err := h.authSvc.GetUserByLogin(c.Request.Context(), req.Login)
+		if err != nil {
+			respondWithError(c, http.StatusNotFound, 404, "user not found")
+			return
+		}
+		ownerID = targetUser.ID
 	}
 
 	filter := &entities.DocumentFilter{
-		OwnerID: ownerID,
-		Key:     req.Key,
-		Value:   req.Value,
-		Limit:   req.Limit,
+		OwnerID:          ownerID,
+		RequestingUserID: requestingUserID,
+		Key:              req.Key,
+		Value:            req.Value,
+		Limit:            req.Limit,
 	}
 
 	docs, err := h.documentSvc.GetList(c.Request.Context(), filter)

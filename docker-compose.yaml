@@ -1,4 +1,41 @@
 services:
+  migrator:
+    image: migrate/migrate
+    container_name: migrator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    volumes:
+      - ./migrations:/migrations
+    env_file:
+      - .env
+    command: ["-path", "/migrations", "-database", "${DATABASE_URL}", "up"]
+    restart: "no"
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    volumes:
+      - ./config:/app/config:ro
+    ports:
+      - "${EXTERNAL_SERVER_PORT}:8080"
+    networks:
+      - app-network
+    env_file:
+      - .env
+    restart: unless-stopped
+
   postgres:
     image: postgres:17-alpine
     container_name: postgres
@@ -8,10 +45,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DATABASE}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     volumes:
-      - postgres_user_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "${EXTERNAL_POSTGRES_PORT}:5432"
+    networks:
+      - app-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DATABASE}"]
       interval: 10s
@@ -24,7 +64,11 @@ services:
     container_name: redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     restart: unless-stopped
+    networks:
+      - app-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -32,4 +76,9 @@ services:
       retries: 5
 
 volumes:
-  postgres_user_data:
+  postgres_data:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge

@@ -105,5 +105,12 @@ func (s *redisCacheService) InvalidatePrefix(ctx context.Context, prefix string)
 }
 
 func (s *redisCacheService) GetListCacheKey(filter *entities.DocumentFilter) string {
-	return fmt.Sprintf("docs:list:%s:%s:%s:%d", filter.OwnerID, filter.Key, filter.Value, filter.Limit)
+	return fmt.Sprintf(
+		"docs:list:owner=%s:user=%s:key=%s:val=%s:limit=%d",
+		filter.OwnerID,
+		filter.RequestingUserID,
+		filter.Key,
+		filter.Value,
+		filter.Limit,
+	)
 }

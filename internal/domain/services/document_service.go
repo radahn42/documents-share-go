@@ -79,6 +79,10 @@ func (s *DocumentService) GetByID(ctx context.Context, docID, userID string) (*e
 }
 
 func (s *DocumentService) GetList(ctx context.Context, filter *entities.DocumentFilter) ([]*entities.Document, error) {
+	if filter.RequestingUserID == "" {
+		return nil, errors.NewForbiddenError("requesting user id is required")
+	}
+
 	cacheKey := s.cache.GetListCacheKey(filter)
 	if docs, err := s.cache.GetDocumentList(ctx, cacheKey); err == nil {
 		return docs, nil

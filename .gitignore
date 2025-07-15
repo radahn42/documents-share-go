@@ -1,5 +1,6 @@
 /.vscode
 /.idea
+/.task
 /bin
 /uploads
 .env
