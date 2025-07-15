@@ -63,12 +63,12 @@ func Run(cfg config.Config) error {
 	}
 
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + cfg.Server.Port,
 		Handler: r,
 	}
 
 	go func() {
-		log.Println("Starting server on :8080")
+		log.Printf("Starting server on :%s\n", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen error: %s\n", err)
 		}
