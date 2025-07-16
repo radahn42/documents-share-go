@@ -47,6 +47,7 @@ func Run(cfg config.Config) error {
 	r.Use(gin.Recovery())
 	r.Use(handlers.HeadToGetMiddleware())
 	r.Use(handlers.CORSMiddleware())
+	r.HandleMethodNotAllowed = true
 
 	api := r.Group("/api")
 	{
