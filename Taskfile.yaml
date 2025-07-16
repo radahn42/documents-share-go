@@ -23,18 +23,6 @@ tasks:
     status:
       - test -x "{{.MIGRATE_BIN}}"
 
-  migrate-debug:
-    desc: "Отладка миграций - показать поддерживаемые драйверы"
-    deps: [install-migrate-cli]
-    cmds:
-      - echo "🔍 Проверяем поддерживаемые драйверы..."
-      - '"{{.MIGRATE_BIN}}" -help'
-      - 'echo "📝 DATABASE_URL: $DATABASE_URL"'
-      - echo "🔧 Конвертированный URL:"
-      - |
-        DB_URL=$(echo "$DATABASE_URL" | sed 's/pgx5/postgres/' | sed 's/@postgres:/@localhost:/')
-        echo "$DB_URL"
-
   migrate-create:
     desc: "Создает пару пустых SQL-файлов миграции"
     deps: [install-migrate-cli]
