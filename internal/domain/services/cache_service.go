@@ -15,6 +15,7 @@ type CacheService interface {
 	SetDocumentList(ctx context.Context, key string, docs []*entities.Document) error
 	InvalidateDocument(ctx context.Context, docID string) error
 	InvalidatePrefix(ctx context.Context, prefix string) error
+	InvalidateUserLists(ctx context.Context, userID string) error
 	GetListCacheKey(filter *entities.DocumentFilter) string
 }
 
@@ -82,7 +83,9 @@ func (s *redisCacheService) SetDocumentList(ctx context.Context, key string, doc
 		return err
 	}
 
-	return s.client.Set(ctx, key, data, s.cacheDuration)
+	listTTL := s.cacheDuration / 2
+
+	return s.client.Set(ctx, key, data, listTTL)
 }
 
 func (s *redisCacheService) InvalidateDocument(ctx context.Context, docID string) error {
@@ -99,6 +102,21 @@ func (s *redisCacheService) InvalidatePrefix(ctx context.Context, prefix string)
 
 	if len(keys) > 0 {
 		return s.client.Del(ctx, keys...)
+	}
+
+	return nil
+}
+
+func (s *redisCacheService) InvalidateUserLists(ctx context.Context, userID string) error {
+	patterns := []string{
+		fmt.Sprintf("docs:list:owner=%s:*", userID),
+		fmt.Sprintf("docs:list:*:user=%s:*", userID),
+	}
+
+	for _, pattern := range patterns {
+		if err := s.InvalidatePrefix(ctx, pattern); err != nil {
+			return err
+		}
 	}
 
 	return nil

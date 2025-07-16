@@ -51,7 +51,14 @@ func (s *DocumentService) Create(
 		return nil, errors.NewInternalError("failed to create document")
 	}
 
-	s.cache.InvalidatePrefix(ctx, "docs:list:")
+	s.cache.SetDocument(ctx, doc)
+
+	s.cache.InvalidateUserLists(ctx, userID)
+	if doc.Grant != nil {
+		for _, grantUserID := range *doc.Grant {
+			s.cache.InvalidateUserLists(ctx, grantUserID)
+		}
+	}
 
 	return doc, nil
 }
@@ -74,7 +81,6 @@ func (s *DocumentService) GetByID(ctx context.Context, docID, userID string) (*e
 	}
 
 	s.cache.SetDocument(ctx, doc)
-
 	return doc, nil
 }
 
@@ -114,7 +120,13 @@ func (s *DocumentService) Delete(ctx context.Context, docID, userID string) erro
 	}
 
 	s.cache.InvalidateDocument(ctx, docID)
-	s.cache.InvalidatePrefix(ctx, "docs:list:")
+	s.cache.InvalidateUserLists(ctx, userID)
+
+	if doc.Grant != nil {
+		for _, grantUserID := range *doc.Grant {
+			s.cache.InvalidateUserLists(ctx, grantUserID)
+		}
+	}
 
 	return nil
 }
@@ -122,6 +134,9 @@ func (s *DocumentService) Delete(ctx context.Context, docID, userID string) erro
 func (s *DocumentService) checkAccess(doc *entities.Document, userID string) bool {
 	if doc.OwnerID == userID || doc.IsPublic {
 		return true
+	}
+	if doc.Grant == nil {
+		return false
 	}
 
 	return slices.Contains(*doc.Grant, userID)
