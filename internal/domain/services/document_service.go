@@ -8,9 +8,6 @@ import (
 	"encoding/json"
 	"log"
 	"slices"
-	"time"
-
-	"github.com/google/uuid"
 )
 
 type DocumentService struct {
@@ -34,17 +31,14 @@ func (s *DocumentService) Create(
 	grant []string,
 ) (*entities.Document, error) {
 	doc := &entities.Document{
-		ID:        uuid.NewString(),
-		Name:      name,
-		OwnerID:   userID,
-		MIME:      mime,
-		IsFile:    isFile,
-		IsPublic:  isPublic,
-		FilePath:  filePath,
-		JSONData:  jsonData,
-		Grant:     &grant,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		Name:     name,
+		OwnerID:  userID,
+		MIME:     mime,
+		IsFile:   isFile,
+		IsPublic: isPublic,
+		FilePath: filePath,
+		JSONData: jsonData,
+		Grant:    &grant,
 	}
 
 	if err := s.docRepo.Create(ctx, doc); err != nil {

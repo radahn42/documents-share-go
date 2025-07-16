@@ -8,7 +8,6 @@ import (
 	"document-server/pkg/errors"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -57,11 +56,8 @@ func (s *AuthService) Register(ctx context.Context, adminToken, login, password 
 	}
 
 	user := &entities.User{
-		ID:        uuid.NewString(),
-		Login:     login,
-		Password:  string(hashedPassword),
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		Login:    login,
+		Password: string(hashedPassword),
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
@@ -83,11 +79,9 @@ func (s *AuthService) Authenticate(ctx context.Context, login, password string) 
 
 	token := utils.GenerateToken()
 	session := &entities.Session{
-		ID:        uuid.NewString(),
 		UserID:    user.ID,
 		Token:     token,
 		ExpiresAt: time.Now().Add(s.tokenDuration),
-		UpdatedAt: time.Now(),
 	}
 
 	if err := s.sessionRepo.Create(ctx, session); err != nil {
