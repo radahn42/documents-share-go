@@ -4,7 +4,10 @@ import (
 	"context"
 	"document-server/internal/domain/entities"
 	"document-server/internal/domain/repositories"
+	appErrors "document-server/pkg/errors"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,7 +33,10 @@ func (r *userRepository) GetByID(ctx context.Context, id string) (*entities.User
 
 	err := row.Scan(&user.ID, &user.Login, &user.Password, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, appErrors.NewNotFoundError("user not found")
+		}
+		return nil, appErrors.NewInternalError("user query failed")
 	}
 	return &user, nil
 }
@@ -43,7 +49,10 @@ func (r *userRepository) GetByLogin(ctx context.Context, login string) (*entitie
 
 	err := row.Scan(&user.ID, &user.Login, &user.Password, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, appErrors.NewNotFoundError("user not found")
+		}
+		return nil, appErrors.NewInternalError("user query failed")
 	}
 	return &user, nil
 }

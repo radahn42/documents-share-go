@@ -4,7 +4,10 @@ import (
 	"context"
 	"document-server/internal/domain/entities"
 	"document-server/internal/domain/repositories"
+	appErrors "document-server/pkg/errors"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -31,7 +34,10 @@ func (r *sessionRepository) GetByToken(ctx context.Context, token string) (*enti
 
 	err := row.Scan(&session.ID, &session.UserID, &session.Token, &session.ExpiresAt, &session.UpdatedAt)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, appErrors.NewNotFoundError("session not found")
+		}
+		return nil, appErrors.NewInternalError("session query failed")
 	}
 
 	return &session, nil
