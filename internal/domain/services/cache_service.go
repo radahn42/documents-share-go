@@ -126,7 +126,7 @@ func (s *redisCacheService) GetListCacheKey(filter *entities.DocumentFilter) str
 	return fmt.Sprintf(
 		"docs:list:owner=%s:user=%s:key=%s:val=%s:limit=%d",
 		filter.OwnerID,
-		filter.RequestingUserID,
+		filter.RequestingUserLogin,
 		filter.Key,
 		filter.Value,
 		filter.Limit,

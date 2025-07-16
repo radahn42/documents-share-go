@@ -6,19 +6,24 @@ import (
 	"document-server/internal/domain/repositories"
 	"document-server/pkg/errors"
 	"encoding/json"
-	"log"
 	"slices"
 )
 
 type DocumentService struct {
-	docRepo repositories.DocumentRepository
-	cache   CacheService
+	docRepo  repositories.DocumentRepository
+	userRepo repositories.UserRepository
+	cache    CacheService
 }
 
-func NewDocumentService(docRepo repositories.DocumentRepository, cache CacheService) *DocumentService {
+func NewDocumentService(
+	docRepo repositories.DocumentRepository,
+	userRepo repositories.UserRepository,
+	cache CacheService,
+) *DocumentService {
 	return &DocumentService{
-		docRepo: docRepo,
-		cache:   cache,
+		docRepo:  docRepo,
+		userRepo: userRepo,
+		cache:    cache,
 	}
 }
 
@@ -57,9 +62,13 @@ func (s *DocumentService) Create(
 	return doc, nil
 }
 
-func (s *DocumentService) GetByID(ctx context.Context, docID, userID string) (*entities.Document, error) {
+func (s *DocumentService) GetByID(ctx context.Context, docID, userLogin string) (*entities.Document, error) {
 	if doc, err := s.cache.GetDocument(ctx, docID); err == nil {
-		if s.checkAccess(doc, userID) {
+		hasAccess, err := s.checkAccess(ctx, doc, userLogin)
+		if err != nil {
+			return nil, errors.NewInternalError("failed to check access")
+		}
+		if hasAccess {
 			return doc, nil
 		}
 		return nil, errors.NewForbiddenError("access denied")
@@ -70,7 +79,11 @@ func (s *DocumentService) GetByID(ctx context.Context, docID, userID string) (*e
 		return nil, errors.NewNotFoundError("document not found")
 	}
 
-	if !s.checkAccess(doc, userID) {
+	hasAccess, err := s.checkAccess(ctx, doc, userLogin)
+	if err != nil {
+		return nil, errors.NewInternalError("failed to check access")
+	}
+	if !hasAccess {
 		return nil, errors.NewForbiddenError("access denied")
 	}
 
@@ -79,8 +92,8 @@ func (s *DocumentService) GetByID(ctx context.Context, docID, userID string) (*e
 }
 
 func (s *DocumentService) GetList(ctx context.Context, filter *entities.DocumentFilter) ([]*entities.Document, error) {
-	if filter.RequestingUserID == "" {
-		return nil, errors.NewForbiddenError("requesting user id is required")
+	if filter.RequestingUserLogin == "" {
+		return nil, errors.NewForbiddenError("requesting user login is required")
 	}
 
 	cacheKey := s.cache.GetListCacheKey(filter)
@@ -90,13 +103,23 @@ func (s *DocumentService) GetList(ctx context.Context, filter *entities.Document
 
 	docs, err := s.docRepo.GetByOwner(ctx, filter)
 	if err != nil {
-		log.Printf("filter: %+v", filter)
 		return nil, errors.NewInternalError("failed to get documents")
 	}
 
-	s.cache.SetDocumentList(ctx, cacheKey, docs)
+	var filteredDocs []*entities.Document
+	for _, doc := range docs {
+		hasAccess, err := s.checkAccess(ctx, doc, filter.RequestingUserLogin)
+		if err != nil {
+			continue
+		}
+		if hasAccess {
+			filteredDocs = append(filteredDocs, doc)
+		}
+	}
 
-	return docs, nil
+	s.cache.SetDocumentList(ctx, cacheKey, filteredDocs)
+
+	return filteredDocs, nil
 }
 
 func (s *DocumentService) Delete(ctx context.Context, docID, userID string) error {
@@ -125,13 +148,22 @@ func (s *DocumentService) Delete(ctx context.Context, docID, userID string) erro
 	return nil
 }
 
-func (s *DocumentService) checkAccess(doc *entities.Document, userID string) bool {
-	if doc.OwnerID == userID || doc.IsPublic {
-		return true
-	}
-	if doc.Grant == nil {
-		return false
+func (s *DocumentService) checkAccess(ctx context.Context, doc *entities.Document, userLogin string) (bool, error) {
+	if doc.IsPublic {
+		return true, nil
 	}
 
-	return slices.Contains(*doc.Grant, userID)
+	user, err := s.userRepo.GetByLogin(ctx, userLogin)
+	if err != nil {
+		return false, errors.NewInternalError("failed to get user")
+	}
+
+	if doc.OwnerID == user.ID {
+		return true, nil
+	}
+	if doc.Grant == nil {
+		return false, nil
+	}
+
+	return slices.Contains(*doc.Grant, userLogin), nil
 }

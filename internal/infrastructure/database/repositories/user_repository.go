@@ -47,15 +47,3 @@ func (r *userRepository) GetByLogin(ctx context.Context, login string) (*entitie
 	}
 	return &user, nil
 }
-
-func (r *userRepository) Update(ctx context.Context, user *entities.User) error {
-	query := `UPDATE users SET password = $1, updated_at = $2 WHERE id = $3`
-	_, err := r.pool.Exec(ctx, query, user.Password, user.UpdatedAt, user.ID)
-	return err
-}
-
-func (r *userRepository) Delete(ctx context.Context, id string) error {
-	query := `DELETE FROM users WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
-}

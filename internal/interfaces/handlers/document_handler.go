@@ -134,7 +134,7 @@ func (h *DocumentHandler) GetList(c *gin.Context) {
 	}
 
 	ownerID := user.ID
-	requestingUserID := user.ID
+	requestingUserLogin := user.Login
 
 	if req.Login != "" {
 		targetUser, err := h.authSvc.GetUserByLogin(c.Request.Context(), req.Login)
@@ -146,11 +146,11 @@ func (h *DocumentHandler) GetList(c *gin.Context) {
 	}
 
 	filter := &entities.DocumentFilter{
-		OwnerID:          ownerID,
-		RequestingUserID: requestingUserID,
-		Key:              req.Key,
-		Value:            req.Value,
-		Limit:            req.Limit,
+		OwnerID:             ownerID,
+		RequestingUserLogin: requestingUserLogin,
+		Key:                 req.Key,
+		Value:               req.Value,
+		Limit:               req.Limit,
 	}
 
 	docs, err := h.documentSvc.GetList(c.Request.Context(), filter)
@@ -181,7 +181,7 @@ func (h *DocumentHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	doc, err := h.documentSvc.GetByID(c.Request.Context(), docID, user.ID)
+	doc, err := h.documentSvc.GetByID(c.Request.Context(), docID, user.Login)
 	if err != nil {
 		handleServiceError(c, err)
 		return

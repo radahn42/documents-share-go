@@ -20,9 +20,9 @@ type Document struct {
 }
 
 type DocumentFilter struct {
-	OwnerID          string
-	RequestingUserID string
-	Key              string
-	Value            string
-	Limit            int
+	OwnerID             string
+	RequestingUserLogin string
+	Key                 string
+	Value               string
+	Limit               int
 }
