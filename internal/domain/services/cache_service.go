@@ -15,7 +15,7 @@ type CacheService interface {
 	SetDocumentList(ctx context.Context, key string, docs []*entities.Document) error
 	InvalidateDocument(ctx context.Context, docID string) error
 	InvalidatePrefix(ctx context.Context, prefix string) error
-	InvalidateUserLists(ctx context.Context, userID string) error
+	InvalidateUserLists(ctx context.Context, userLogin string) error
 	GetListCacheKey(filter *entities.DocumentFilter) string
 }
 
@@ -107,10 +107,10 @@ func (s *redisCacheService) InvalidatePrefix(ctx context.Context, prefix string)
 	return nil
 }
 
-func (s *redisCacheService) InvalidateUserLists(ctx context.Context, userID string) error {
+func (s *redisCacheService) InvalidateUserLists(ctx context.Context, userLogin string) error {
 	patterns := []string{
-		fmt.Sprintf("docs:list:owner=%s:*", userID),
-		fmt.Sprintf("docs:list:*:user=%s:*", userID),
+		fmt.Sprintf("docs:list:owner=%s:*", userLogin),
+		fmt.Sprintf("docs:list:*:user=%s:*", userLogin),
 	}
 
 	for _, pattern := range patterns {

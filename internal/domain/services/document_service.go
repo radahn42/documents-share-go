@@ -6,7 +6,10 @@ import (
 	"document-server/internal/domain/repositories"
 	"document-server/pkg/errors"
 	"encoding/json"
+	"log"
 	"slices"
+	"sync"
+	"time"
 )
 
 type DocumentService struct {
@@ -50,28 +53,24 @@ func (s *DocumentService) Create(
 		return nil, errors.NewInternalError("failed to create document")
 	}
 
-	s.cache.SetDocument(ctx, doc)
-
-	s.cache.InvalidateUserLists(ctx, userID)
-	if doc.Grant != nil {
-		for _, grantUserID := range *doc.Grant {
-			s.cache.InvalidateUserLists(ctx, grantUserID)
-		}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, errors.NewInternalError("failed to get user")
 	}
+
+	go s.performCacheOperations(doc, user.Login)
 
 	return doc, nil
 }
 
 func (s *DocumentService) GetByID(ctx context.Context, docID, userLogin string) (*entities.Document, error) {
 	if doc, err := s.cache.GetDocument(ctx, docID); err == nil {
-		hasAccess, err := s.checkAccess(ctx, doc, userLogin)
-		if err != nil {
+		if hasAccess, err := s.checkAccess(ctx, doc, userLogin); err != nil {
 			return nil, errors.NewInternalError("failed to check access")
+		} else if !hasAccess {
+			return nil, errors.NewForbiddenError("access denied")
 		}
-		if hasAccess {
-			return doc, nil
-		}
-		return nil, errors.NewForbiddenError("access denied")
+		return doc, nil
 	}
 
 	doc, err := s.docRepo.GetByID(ctx, docID)
@@ -87,7 +86,14 @@ func (s *DocumentService) GetByID(ctx context.Context, docID, userLogin string) 
 		return nil, errors.NewForbiddenError("access denied")
 	}
 
-	s.cache.SetDocument(ctx, doc)
+	go s.safeCacheOperation(func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.cache.SetDocument(cacheCtx, doc); err != nil {
+			log.Printf("Failed to cache document %s: %v", doc.ID, err)
+		}
+	})
+
 	return doc, nil
 }
 
@@ -106,18 +112,18 @@ func (s *DocumentService) GetList(ctx context.Context, filter *entities.Document
 		return nil, errors.NewInternalError("failed to get documents")
 	}
 
-	var filteredDocs []*entities.Document
-	for _, doc := range docs {
-		hasAccess, err := s.checkAccess(ctx, doc, filter.RequestingUserLogin)
-		if err != nil {
-			continue
-		}
-		if hasAccess {
-			filteredDocs = append(filteredDocs, doc)
-		}
+	filteredDocs, err := s.filterDocumentsWithAccess(ctx, docs, filter.RequestingUserLogin)
+	if err != nil {
+		return nil, err
 	}
 
-	s.cache.SetDocumentList(ctx, cacheKey, filteredDocs)
+	go s.safeCacheOperation(func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.cache.SetDocumentList(cacheCtx, cacheKey, filteredDocs); err != nil {
+			log.Printf("Failed to cache document list: %v", err)
+		}
+	})
 
 	return filteredDocs, nil
 }
@@ -136,14 +142,33 @@ func (s *DocumentService) Delete(ctx context.Context, docID, userID string) erro
 		return errors.NewInternalError("failed to delete document")
 	}
 
-	s.cache.InvalidateDocument(ctx, docID)
-	s.cache.InvalidateUserLists(ctx, userID)
-
-	if doc.Grant != nil {
-		for _, grantUserID := range *doc.Grant {
-			s.cache.InvalidateUserLists(ctx, grantUserID)
-		}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		log.Printf("Failed to get user for cache invalidation: %v", err)
 	}
+
+	go s.safeCacheOperation(func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := s.cache.InvalidateDocument(cacheCtx, docID); err != nil {
+			log.Printf("Failed to invalidate document cache %s: %v", docID, err)
+		}
+
+		if user != nil {
+			if err := s.cache.InvalidateUserLists(cacheCtx, user.Login); err != nil {
+				log.Printf("Failed to invalidate user lists for %s: %v", user.Login, err)
+			}
+		}
+
+		if doc.Grant != nil {
+			for _, grantUserLogin := range *doc.Grant {
+				if err := s.cache.InvalidateUserLists(cacheCtx, grantUserLogin); err != nil {
+					log.Printf("Failed to invalidate user lists for granted user %s: %v", grantUserLogin, err)
+				}
+			}
+		}
+	})
 
 	return nil
 }
@@ -161,9 +186,93 @@ func (s *DocumentService) checkAccess(ctx context.Context, doc *entities.Documen
 	if doc.OwnerID == user.ID {
 		return true, nil
 	}
-	if doc.Grant == nil {
-		return false, nil
+
+	if doc.Grant != nil && slices.Contains(*doc.Grant, userLogin) {
+		return true, nil
 	}
 
-	return slices.Contains(*doc.Grant, userLogin), nil
+	return false, nil
+}
+
+func (s *DocumentService) filterDocumentsWithAccess(ctx context.Context, docs []*entities.Document, userLogin string) ([]*entities.Document, error) {
+	const numWorkers = 5
+	jobs := make(chan *entities.Document, len(docs))
+	results := make(chan *entities.Document, len(docs))
+
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for range numWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for doc := range jobs {
+				if hasAccess, err := s.checkAccess(ctx, doc, userLogin); err != nil {
+					log.Printf("Error checking access for document %s: %v", doc.ID, err)
+				} else if hasAccess {
+					select {
+					case results <- doc:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, doc := range docs {
+			select {
+			case jobs <- doc:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var filteredDocs []*entities.Document
+	for doc := range results {
+		filteredDocs = append(filteredDocs, doc)
+	}
+
+	return filteredDocs, nil
+}
+
+func (s *DocumentService) performCacheOperations(doc *entities.Document, ownerLogin string) {
+	s.safeCacheOperation(func() {
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := s.cache.SetDocument(cacheCtx, doc); err != nil {
+			log.Printf("Failed to cache document %s: %v", doc.ID, err)
+		}
+
+		if err := s.cache.InvalidateUserLists(cacheCtx, ownerLogin); err != nil {
+			log.Printf("Failed to invalidate user lists for %s: %v", ownerLogin, err)
+		}
+
+		if doc.Grant != nil {
+			for _, grantUserLogin := range *doc.Grant {
+				if err := s.cache.InvalidateUserLists(cacheCtx, grantUserLogin); err != nil {
+					log.Printf("Failed to invalidate user lists for granted user %s: %v", grantUserLogin, err)
+				}
+			}
+		}
+	})
+}
+
+func (s *DocumentService) safeCacheOperation(operation func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Panic in cache operation: %v", r)
+		}
+	}()
+	operation()
 }
