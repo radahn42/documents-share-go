@@ -8,8 +8,8 @@ import (
 	"document-server/internal/infrastructure/database"
 	"document-server/internal/infrastructure/database/repositories"
 	"document-server/internal/interfaces/handlers"
+	"document-server/pkg/logger"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,17 +17,20 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 func Run(cfg config.Config) error {
 	db, err := database.NewPostgresDB(cfg.Database)
 	if err != nil {
+		logger.Error("Failed to connect to database", zap.Error(err))
 		return err
 	}
 	defer db.Close()
 
 	redisClient, err := cache.NewRedisCache(cfg.Redis)
 	if err != nil {
+		logger.Error("Failed to connect to redis", zap.Error(err))
 		return err
 	}
 	defer redisClient.Close()
@@ -69,9 +72,9 @@ func Run(cfg config.Config) error {
 	}
 
 	go func() {
-		log.Printf("Starting server on :%s\n", cfg.Server.Port)
+		logger.Info("Starting server", zap.String("port", cfg.Server.Port))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen error: %s\n", err)
+			logger.Fatal("Failed to listen server", zap.Error(err))
 		}
 	}()
 
@@ -79,7 +82,7 @@ func Run(cfg config.Config) error {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	logger.Info("Shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

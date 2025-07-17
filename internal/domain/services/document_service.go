@@ -73,21 +73,10 @@ func (s *DocumentService) Create(
 		return nil, errors.NewInternalError("failed to create document")
 	}
 
-	user, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		s.logger.Error("Failed to get user for cache operations",
-			zap.String("user_id", userID),
-			zap.Error(err),
-		)
-		return nil, errors.NewInternalError("failed to get user")
-	}
-
 	s.logger.Info("Document created successfully",
 		zap.String("doc_id", doc.ID),
 		zap.String("user_id", userID),
 	)
-
-	go s.performCacheOperations(doc, user.Login)
 
 	return doc, nil
 }

@@ -25,17 +25,15 @@ func NewDocumentRepository(pool *pgxpool.Pool) repositories.DocumentRepository {
 
 const (
 	baseSelectQuery = `SELECT id, name, owner_id, mime, is_file, is_public, file_path, json_data, "grant", created_at, updated_at FROM documents`
-	insertQuery     = `INSERT INTO documents (name, owner_id, mime, is_file, is_public, file_path, json_data, "grant")
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id`
-	deleteQuery = `DELETE FROM documents WHERE id = $1`
+	insertQuery     = `INSERT INTO documents (name, owner_id, mime, is_file, is_public, file_path, json_data, "grant") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	deleteQuery     = `DELETE FROM documents WHERE id = $1`
 )
 
 func (r *documentRepository) Create(ctx context.Context, doc *entities.Document) error {
-	err := r.pool.QueryRow(ctx, insertQuery,
+	_, err := r.pool.Exec(ctx, insertQuery,
 		doc.Name, doc.OwnerID, doc.MIME, doc.IsFile,
 		doc.IsPublic, doc.FilePath, doc.JSONData, doc.Grant,
-	).Scan(&doc.ID)
+	)
 	return r.wrapError(err)
 }
 
