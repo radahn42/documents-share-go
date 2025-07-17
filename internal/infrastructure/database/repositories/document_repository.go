@@ -5,22 +5,27 @@ import (
 	"document-server/internal/domain/entities"
 	"document-server/internal/domain/repositories"
 	appErrors "document-server/pkg/errors"
+	"document-server/pkg/logger"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 type documentRepository struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	logger *zap.Logger
 }
 
 func NewDocumentRepository(pool *pgxpool.Pool) repositories.DocumentRepository {
-	return &documentRepository{pool: pool}
+	return &documentRepository{
+		pool:   pool,
+		logger: logger.Logger,
+	}
 }
 
 const (
@@ -35,7 +40,17 @@ func (r *documentRepository) Create(ctx context.Context, doc *entities.Document)
 		doc.Name, doc.OwnerID, doc.MIME, doc.IsFile,
 		doc.IsPublic, doc.FilePath, doc.JSONData, doc.Grant,
 	).Scan(&doc.ID, &doc.CreatedAt, &doc.UpdatedAt)
-	return r.wrapError(err)
+
+	if err != nil {
+		r.logger.Error("Database operation failed",
+			zap.String("operation", "create_document"),
+			zap.String("owner_id", doc.OwnerID),
+			zap.Error(err),
+		)
+		return r.wrapError(err)
+	}
+
+	return nil
 }
 
 func (r *documentRepository) GetByID(ctx context.Context, id string) (*entities.Document, error) {
@@ -49,8 +64,14 @@ func (r *documentRepository) GetByID(ctx context.Context, id string) (*entities.
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, appErrors.NewNotFoundError("document not found")
 		}
+		r.logger.Error("Database operation failed",
+			zap.String("operation", "get_document_by_id"),
+			zap.String("doc_id", id),
+			zap.Error(err),
+		)
 		return nil, appErrors.NewInternalError("database query failed")
 	}
+
 	return &doc, nil
 }
 
@@ -63,16 +84,40 @@ func (r *documentRepository) GetByOwner(ctx context.Context, filter *entities.Do
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
+		r.logger.Error("Database operation failed",
+			zap.String("operation", "get_documents_by_owner"),
+			zap.String("owner_id", filter.OwnerID),
+			zap.Error(err),
+		)
 		return nil, appErrors.NewInternalError("failed to query documents")
 	}
 	defer rows.Close()
 
-	return r.scanDocuments(rows)
+	docs, err := r.scanDocuments(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	return docs, nil
 }
 
 func (r *documentRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, deleteQuery, id)
-	return r.wrapError(err)
+	result, err := r.pool.Exec(ctx, deleteQuery, id)
+	if err != nil {
+		r.logger.Error("Database operation failed",
+			zap.String("operation", "delete_document"),
+			zap.String("doc_id", id),
+			zap.Error(err),
+		)
+		return r.wrapError(err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return appErrors.NewNotFoundError("document not found")
+	}
+
+	return nil
 }
 
 func (r *documentRepository) buildFilterQuery(filter *entities.DocumentFilter) (string, []any) {
@@ -136,12 +181,20 @@ func (r *documentRepository) scanDocuments(rows pgx.Rows) ([]*entities.Document,
 			&doc.FilePath, &doc.JSONData, &doc.Grant, &doc.CreatedAt, &doc.UpdatedAt,
 		)
 		if err != nil {
+			r.logger.Error("Database operation failed",
+				zap.String("operation", "scan_document_row"),
+				zap.Error(err),
+			)
 			return nil, appErrors.NewInternalError("failed to scan document")
 		}
 		docs = append(docs, doc)
 	}
 
 	if err := rows.Err(); err != nil {
+		r.logger.Error("Database operation failed",
+			zap.String("operation", "iterate_rows"),
+			zap.Error(err),
+		)
 		return nil, appErrors.NewInternalError("rows iteration error")
 	}
 

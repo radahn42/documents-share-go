@@ -20,8 +20,8 @@ func NewUserRepository(pool *pgxpool.Pool) repositories.UserRepository {
 }
 
 func (r *userRepository) Create(ctx context.Context, user *entities.User) error {
-	query := `INSERT INTO users (login, password) VALUES ($1, $2)`
-	_, err := r.pool.Exec(ctx, query, user.Login, user.Password)
+	query := `INSERT INTO users (login, password) VALUES ($1, $2) RETURNING id, created_at, updated_at`
+	err := r.pool.QueryRow(ctx, query, user.Login, user.Password).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
 	return err
 }
 
