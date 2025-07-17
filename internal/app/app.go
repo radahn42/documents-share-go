@@ -40,7 +40,7 @@ func Run(cfg config.Config) error {
 	sessionRepo := repositories.NewSessionRepository(db.Pool())
 
 	cacheSvc := services.NewRedisCacheService(redisClient, cfg.Auth.CacheDuration)
-	authSvc := services.NewAuthService(userRepo, sessionRepo, cfg.Auth.AdminToken, cfg.Auth.JWTSecret, cfg.Auth.TokenDuration)
+	authSvc := services.NewAuthService(userRepo, sessionRepo, cfg.Auth.AdminToken, cfg.Auth.TokenDuration)
 	docSvc := services.NewDocumentService(docRepo, userRepo, cacheSvc)
 
 	authHandler := handlers.NewAuthHandler(authSvc)

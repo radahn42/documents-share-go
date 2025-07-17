@@ -38,7 +38,6 @@ type RedisConfig struct {
 
 type AuthConfig struct {
 	AdminToken    string        `mapstructure:"admin_token"`
-	JWTSecret     string        `mapstructure:"jwt_secret"`
 	TokenDuration time.Duration `mapstructure:"token_duration"`
 	CacheDuration time.Duration `mapstructure:"cache_duration"`
 }
@@ -65,7 +64,6 @@ func Load() (Config, error) {
 	viper.SetDefault("redis.address", "localhost:6379")
 	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("auth.admin_token", "admin_secret_token")
-	viper.SetDefault("auth.jwt_secret", "jwt_secret_key")
 	viper.SetDefault("auth.token_duration", "24h")
 	viper.SetDefault("auth.cache_duration", "1h")
 	viper.SetDefault("storage.path", "./uploads")

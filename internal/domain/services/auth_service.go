@@ -17,7 +17,6 @@ type AuthService struct {
 	userRepo      repositories.UserRepository
 	sessionRepo   repositories.SessionRepository
 	adminToken    string
-	jwtSecret     string
 	tokenDuration time.Duration
 	logger        *zap.Logger
 }
@@ -25,14 +24,13 @@ type AuthService struct {
 func NewAuthService(
 	userRepo repositories.UserRepository,
 	sessionRepo repositories.SessionRepository,
-	adminToken, jwtSecret string,
+	adminToken string,
 	tokenDuration time.Duration,
 ) *AuthService {
 	return &AuthService{
 		userRepo:      userRepo,
 		sessionRepo:   sessionRepo,
 		adminToken:    adminToken,
-		jwtSecret:     jwtSecret,
 		tokenDuration: tokenDuration,
 		logger:        logger.Logger,
 	}
