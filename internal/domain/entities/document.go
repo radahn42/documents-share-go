@@ -12,7 +12,7 @@ type Document struct {
 	MIME      string           `json:"mime"`
 	IsFile    bool             `json:"file"`
 	IsPublic  bool             `json:"public"`
-	FilePath  *string          `json:"-"`
+	FilePath  *string          `json:"file_path,omitempty"`
 	JSONData  *json.RawMessage `json:"json,omitempty"`
 	Grant     *[]string        `json:"grant"`
 	CreatedAt time.Time        `json:"created_at"`
