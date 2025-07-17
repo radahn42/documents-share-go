@@ -7,6 +7,7 @@ import (
 )
 
 type Config struct {
+	Env      string         `mapstructrue:"env"`
 	Server   ServerConfig   `mapstructure:"server"`
 	Database DatabaseConfig `mapstructure:"database"`
 	Redis    RedisConfig    `mapstructure:"redis"`
@@ -54,6 +55,7 @@ func Load() (Config, error) {
 	viper.AddConfigPath("./config")
 	viper.AddConfigPath(".")
 
+	viper.SetDefault("env", "dev")
 	viper.SetDefault("server.port", "8080")
 	viper.SetDefault("server.read_timeout", "10s")
 	viper.SetDefault("server.write_timeout", "10s")

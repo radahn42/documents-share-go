@@ -5,17 +5,22 @@ import (
 	"document-server/internal/domain/entities"
 	"document-server/internal/domain/repositories"
 	"document-server/pkg/errors"
+	"document-server/pkg/logger"
 	"encoding/json"
 	"log"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type DocumentService struct {
 	docRepo  repositories.DocumentRepository
 	userRepo repositories.UserRepository
 	cache    CacheService
+	logger   *zap.Logger
 }
 
 func NewDocumentService(
@@ -27,6 +32,7 @@ func NewDocumentService(
 		docRepo:  docRepo,
 		userRepo: userRepo,
 		cache:    cache,
+		logger:   logger.Logger,
 	}
 }
 
@@ -38,6 +44,15 @@ func (s *DocumentService) Create(
 	jsonData *json.RawMessage,
 	grant []string,
 ) (*entities.Document, error) {
+	s.logger.Debug("Creating document",
+		zap.String("user_id", userID),
+		zap.String("name", name),
+		zap.String("mime", mime),
+		zap.Bool("is_file", isFile),
+		zap.Bool("is_public", isPublic),
+		zap.Strings("grant", grant),
+	)
+
 	doc := &entities.Document{
 		Name:     name,
 		OwnerID:  userID,
@@ -50,13 +65,27 @@ func (s *DocumentService) Create(
 	}
 
 	if err := s.docRepo.Create(ctx, doc); err != nil {
+		s.logger.Error("Failed to create document in repository",
+			zap.String("user_id", userID),
+			zap.String("name", name),
+			zap.Error(err),
+		)
 		return nil, errors.NewInternalError("failed to create document")
 	}
 
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
+		s.logger.Error("Failed to get user for cache operations",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
 		return nil, errors.NewInternalError("failed to get user")
 	}
+
+	s.logger.Info("Document created successfully",
+		zap.String("doc_id", doc.ID),
+		zap.String("user_id", userID),
+	)
 
 	go s.performCacheOperations(doc, user.Login)
 
@@ -64,33 +93,85 @@ func (s *DocumentService) Create(
 }
 
 func (s *DocumentService) GetByID(ctx context.Context, docID, userLogin string) (*entities.Document, error) {
+	s.logger.Debug("Getting document by ID",
+		zap.String("doc_id", docID),
+		zap.String("user_login", userLogin),
+	)
+
 	if doc, err := s.cache.GetDocument(ctx, docID); err == nil {
+		s.logger.Debug("Document found in cache",
+			zap.String("doc_id", docID),
+		)
+
 		if hasAccess, err := s.checkAccess(ctx, doc, userLogin); err != nil {
+			s.logger.Error("Failed to check access for cached document",
+				zap.String("doc_id", docID),
+				zap.String("user_login", userLogin),
+				zap.Error(err),
+			)
 			return nil, errors.NewInternalError("failed to check access")
 		} else if !hasAccess {
+			s.logger.Warn("Access denied for cached document",
+				zap.String("doc_id", docID),
+				zap.String("user_login", userLogin),
+			)
 			return nil, errors.NewForbiddenError("access denied")
 		}
+
+		s.logger.Debug("Document access granted from cache",
+			zap.String("doc_id", docID),
+			zap.String("user_login", userLogin),
+		)
 		return doc, nil
 	}
 
+	s.logger.Debug("Document not found in cache, querying database",
+		zap.String("doc_id", docID),
+	)
+
 	doc, err := s.docRepo.GetByID(ctx, docID)
 	if err != nil {
+		s.logger.Error("Document not found in database",
+			zap.String("doc_id", docID),
+			zap.Error(err),
+		)
 		return nil, errors.NewNotFoundError("document not found")
 	}
 
 	hasAccess, err := s.checkAccess(ctx, doc, userLogin)
 	if err != nil {
+		s.logger.Error("Failed to check access for document from database",
+			zap.String("doc_id", docID),
+			zap.String("user_login", userLogin),
+			zap.Error(err),
+		)
 		return nil, errors.NewInternalError("failed to check access")
 	}
 	if !hasAccess {
+		s.logger.Warn("Access denied for document from database",
+			zap.String("doc_id", docID),
+			zap.String("user_login", userLogin),
+		)
 		return nil, errors.NewForbiddenError("access denied")
 	}
+
+	s.logger.Info("Document retrieved successfully",
+		zap.String("doc_id", docID),
+		zap.String("user_login", userLogin),
+	)
 
 	go s.safeCacheOperation(func() {
 		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.cache.SetDocument(cacheCtx, doc); err != nil {
-			log.Printf("Failed to cache document %s: %v", doc.ID, err)
+			s.logger.Error("Failed to cache document",
+				zap.String("doc_id", docID),
+				zap.Error(err),
+			)
+		} else {
+			s.logger.Debug("Document cached successfully",
+				zap.String("doc_id", docID),
+			)
 		}
 	})
 
@@ -98,30 +179,64 @@ func (s *DocumentService) GetByID(ctx context.Context, docID, userLogin string) 
 }
 
 func (s *DocumentService) GetList(ctx context.Context, filter *entities.DocumentFilter) ([]*entities.Document, error) {
+	s.logger.Debug("Getting document list",
+		zap.String("requesting_user", filter.RequestingUserLogin),
+		zap.Any("filter", filter),
+	)
+
 	if filter.RequestingUserLogin == "" {
+		s.logger.Warn("Document list requested without user login")
 		return nil, errors.NewForbiddenError("requesting user login is required")
 	}
 
 	cacheKey := s.cache.GetListCacheKey(filter)
+
 	if docs, err := s.cache.GetDocumentList(ctx, cacheKey); err == nil {
+		s.logger.Debug("Document list found in cache",
+			zap.String("cache_key", cacheKey),
+			zap.Int("count", len(docs)),
+		)
 		return docs, nil
 	}
 
+	s.logger.Debug("Document list not found in cache, querying database",
+		zap.String("cache_key", cacheKey),
+	)
+
 	docs, err := s.docRepo.GetByOwner(ctx, filter)
 	if err != nil {
+		s.logger.Error("Failed to get documents from database",
+			zap.String("requesting_user", filter.RequestingUserLogin),
+			zap.Error(err),
+		)
 		return nil, errors.NewInternalError("failed to get documents")
 	}
 
 	filteredDocs, err := s.filterDocumentsWithAccess(ctx, docs, filter.RequestingUserLogin)
 	if err != nil {
-		return nil, err
+		return nil, errors.NewInternalError("failed to filter documents by access")
 	}
+
+	s.logger.Info("Document list retrieved successfully",
+		zap.String("requesting_user", filter.RequestingUserLogin),
+		zap.Int("total_count", len(docs)),
+		zap.Int("filtered_count", len(filteredDocs)),
+	)
 
 	go s.safeCacheOperation(func() {
 		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.cache.SetDocumentList(cacheCtx, cacheKey, filteredDocs); err != nil {
+			s.logger.Error("Failed to cache document list",
+				zap.String("cache_key", cacheKey),
+				zap.Error(err),
+			)
 			log.Printf("Failed to cache document list: %v", err)
+		} else {
+			s.logger.Debug("Document list cached successfully",
+				zap.String("cache_key", cacheKey),
+				zap.Int("count", len(filteredDocs)),
+			)
 		}
 	})
 
@@ -129,42 +244,89 @@ func (s *DocumentService) GetList(ctx context.Context, filter *entities.Document
 }
 
 func (s *DocumentService) Delete(ctx context.Context, docID, userID string) error {
+	s.logger.Debug("Deleting document",
+		zap.String("doc_id", docID),
+		zap.String("user_id", userID),
+	)
+
 	doc, err := s.docRepo.GetByID(ctx, docID)
 	if err != nil {
+		s.logger.Error("Document not found for deletion",
+			zap.String("doc_id", docID),
+			zap.Error(err),
+		)
 		return errors.NewNotFoundError("document not found")
 	}
 
 	if doc.OwnerID != userID {
+		s.logger.Warn("User attempted to delete document they don't own",
+			zap.String("doc_id", docID),
+			zap.String("user_id", userID),
+			zap.String("owner_id", doc.OwnerID),
+		)
 		return errors.NewForbiddenError("access denied")
 	}
 
 	if err := s.docRepo.Delete(ctx, docID); err != nil {
+		s.logger.Error("Failed to delete document from database",
+			zap.String("doc_id", docID),
+			zap.Error(err),
+		)
 		return errors.NewInternalError("failed to delete document")
 	}
 
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		log.Printf("Failed to get user for cache invalidation: %v", err)
+		s.logger.Error("Failed to get user for cache invalidation",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
 	}
+
+	s.logger.Info("Document deleted successfully",
+		zap.String("doc_id", docID),
+		zap.String("user_id", userID),
+	)
 
 	go s.safeCacheOperation(func() {
 		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := s.cache.InvalidateDocument(cacheCtx, docID); err != nil {
-			log.Printf("Failed to invalidate document cache %s: %v", docID, err)
+			s.logger.Error("Failed to invalidate document cache",
+				zap.String("doc_id", docID),
+				zap.Error(err),
+			)
+		} else {
+			s.logger.Debug("Document cache invalidated",
+				zap.String("doc_id", docID),
+			)
 		}
 
 		if user != nil {
 			if err := s.cache.InvalidateUserLists(cacheCtx, user.Login); err != nil {
-				log.Printf("Failed to invalidate user lists for %s: %v", user.Login, err)
+				s.logger.Error("Failed to invalidate user lists",
+					zap.String("user_login", user.Login),
+					zap.Error(err),
+				)
+			} else {
+				s.logger.Debug("User lists cache invalidated",
+					zap.String("user_login", user.Login),
+				)
 			}
 		}
 
 		if doc.Grant != nil {
 			for _, grantUserLogin := range *doc.Grant {
 				if err := s.cache.InvalidateUserLists(cacheCtx, grantUserLogin); err != nil {
-					log.Printf("Failed to invalidate user lists for granted user %s: %v", grantUserLogin, err)
+					s.logger.Error("Failed to invalidate user lists for granted user",
+						zap.String("granted_user_login", grantUserLogin),
+						zap.Error(err),
+					)
+				} else {
+					s.logger.Debug("Granted user lists cache invalidated",
+						zap.String("granted_user_login", grantUserLogin),
+					)
 				}
 			}
 		}
@@ -180,6 +342,10 @@ func (s *DocumentService) checkAccess(ctx context.Context, doc *entities.Documen
 
 	user, err := s.userRepo.GetByLogin(ctx, userLogin)
 	if err != nil {
+		s.logger.Error("Failed to get user for access check",
+			zap.String("user_login", userLogin),
+			zap.Error(err),
+		)
 		return false, errors.NewInternalError("failed to get user")
 	}
 
@@ -195,7 +361,14 @@ func (s *DocumentService) checkAccess(ctx context.Context, doc *entities.Documen
 }
 
 func (s *DocumentService) filterDocumentsWithAccess(ctx context.Context, docs []*entities.Document, userLogin string) ([]*entities.Document, error) {
-	const numWorkers = 5
+	numWorkers := runtime.NumCPU() / 2
+
+	s.logger.Debug("Filtering documents with access",
+		zap.String("user_login", userLogin),
+		zap.Int("total_docs", len(docs)),
+		zap.Int("workers", numWorkers),
+	)
+
 	jobs := make(chan *entities.Document, len(docs))
 	results := make(chan *entities.Document, len(docs))
 
@@ -203,13 +376,16 @@ func (s *DocumentService) filterDocumentsWithAccess(ctx context.Context, docs []
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	for range numWorkers {
+	for i := range numWorkers {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
 			for doc := range jobs {
 				if hasAccess, err := s.checkAccess(ctx, doc, userLogin); err != nil {
-					log.Printf("Error checking access for document %s: %v", doc.ID, err)
+					s.logger.Error("Error checking access for document",
+						zap.String("doc_id", doc.ID),
+						zap.Int("worker_id", workerID),
+					)
 				} else if hasAccess {
 					select {
 					case results <- doc:
@@ -218,7 +394,7 @@ func (s *DocumentService) filterDocumentsWithAccess(ctx context.Context, docs []
 					}
 				}
 			}
-		}()
+		}(i)
 	}
 
 	go func() {
@@ -242,6 +418,11 @@ func (s *DocumentService) filterDocumentsWithAccess(ctx context.Context, docs []
 		filteredDocs = append(filteredDocs, doc)
 	}
 
+	s.logger.Debug("Document filtering completed",
+		zap.String("user_login", userLogin),
+		zap.Int("filtered_count", len(filteredDocs)),
+	)
+
 	return filteredDocs, nil
 }
 
@@ -251,17 +432,38 @@ func (s *DocumentService) performCacheOperations(doc *entities.Document, ownerLo
 		defer cancel()
 
 		if err := s.cache.SetDocument(cacheCtx, doc); err != nil {
-			log.Printf("Failed to cache document %s: %v", doc.ID, err)
+			s.logger.Error("Failed to cache document",
+				zap.String("doc_id", doc.ID),
+				zap.Error(err),
+			)
+		} else {
+			s.logger.Debug("Document cached successfully",
+				zap.String("doc_id", doc.ID),
+			)
 		}
 
 		if err := s.cache.InvalidateUserLists(cacheCtx, ownerLogin); err != nil {
-			log.Printf("Failed to invalidate user lists for %s: %v", ownerLogin, err)
+			s.logger.Error("Failed to invalidate user lists",
+				zap.String("user_login", ownerLogin),
+				zap.Error(err),
+			)
+		} else {
+			s.logger.Debug("User lists cache invalidated",
+				zap.String("user_login", ownerLogin),
+			)
 		}
 
 		if doc.Grant != nil {
 			for _, grantUserLogin := range *doc.Grant {
 				if err := s.cache.InvalidateUserLists(cacheCtx, grantUserLogin); err != nil {
-					log.Printf("Failed to invalidate user lists for granted user %s: %v", grantUserLogin, err)
+					s.logger.Error("Failed to invalidate user lists for granted user",
+						zap.String("granted_user_login", grantUserLogin),
+						zap.Error(err),
+					)
+				} else {
+					s.logger.Debug("Granted user lists cache invalidated",
+						zap.String("granted_user_login", grantUserLogin),
+					)
 				}
 			}
 		}
@@ -271,7 +473,9 @@ func (s *DocumentService) performCacheOperations(doc *entities.Document, ownerLo
 func (s *DocumentService) safeCacheOperation(operation func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic in cache operation: %v", r)
+			s.logger.Error("Panic in cache operation",
+				zap.Any("panic", r),
+			)
 		}
 	}()
 	operation()
