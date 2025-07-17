@@ -415,50 +415,6 @@ func (s *DocumentService) filterDocumentsWithAccess(ctx context.Context, docs []
 	return filteredDocs, nil
 }
 
-func (s *DocumentService) performCacheOperations(doc *entities.Document, ownerLogin string) {
-	s.safeCacheOperation(func() {
-		cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := s.cache.SetDocument(cacheCtx, doc); err != nil {
-			s.logger.Error("Failed to cache document",
-				zap.String("doc_id", doc.ID),
-				zap.Error(err),
-			)
-		} else {
-			s.logger.Debug("Document cached successfully",
-				zap.String("doc_id", doc.ID),
-			)
-		}
-
-		if err := s.cache.InvalidateUserLists(cacheCtx, ownerLogin); err != nil {
-			s.logger.Error("Failed to invalidate user lists",
-				zap.String("user_login", ownerLogin),
-				zap.Error(err),
-			)
-		} else {
-			s.logger.Debug("User lists cache invalidated",
-				zap.String("user_login", ownerLogin),
-			)
-		}
-
-		if doc.Grant != nil {
-			for _, grantUserLogin := range *doc.Grant {
-				if err := s.cache.InvalidateUserLists(cacheCtx, grantUserLogin); err != nil {
-					s.logger.Error("Failed to invalidate user lists for granted user",
-						zap.String("granted_user_login", grantUserLogin),
-						zap.Error(err),
-					)
-				} else {
-					s.logger.Debug("Granted user lists cache invalidated",
-						zap.String("granted_user_login", grantUserLogin),
-					)
-				}
-			}
-		}
-	})
-}
-
 func (s *DocumentService) safeCacheOperation(operation func()) {
 	defer func() {
 		if r := recover(); r != nil {
